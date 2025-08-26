@@ -86,14 +86,27 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't save file", err)
 		return
 	}
-	tempVideo.Seek(0, io.SeekStart)
+
+	processedVideoPath, err := ffmpeg.ProcessVideoForFastStart(tempVideo.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error optimizing video", err)
+		return
+	}
+	defer os.Remove(processedVideoPath)
+
+	processedVideo, err := os.Open(processedVideoPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "error processing video", err)
+		return
+	}
+	defer processedVideo.Close()
 
 	nameBytes := make([]byte, 32)
 	rand.Read(nameBytes)
 	name := base64.RawURLEncoding.EncodeToString(nameBytes)
 	filename := name + ".mp4"
 
-	aspectRatio, err := ffmpeg.GetVideoAspectRatio(tempVideo.Name())
+	aspectRatio, err := ffmpeg.GetVideoAspectRatio(processedVideo.Name())
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Couldn't get aspect ratio", err)
 		return
@@ -109,7 +122,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &key,
-		Body:        tempVideo,
+		Body:        processedVideo,
 		ContentType: &mediaType,
 	})
 
